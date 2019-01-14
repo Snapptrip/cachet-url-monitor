@@ -4,6 +4,7 @@ import copy
 import logging
 import os
 import re
+import json
 import time
 
 import requests
@@ -321,7 +322,8 @@ class Expectaction(object):
         expectations = {
             'HTTP_STATUS': HttpStatus,
             'LATENCY': Latency,
-            'REGEX': Regex
+            'REGEX': Regex,
+            'JSON': Json,
         }
         return expectations.get(configuration['type'])(configuration)
 
@@ -396,3 +398,21 @@ class Regex(Expectaction):
 
     def __str__(self):
         return repr('Regex: %s' % (self.regex_string,))
+
+class Json(Expectaction):
+    def __init__(self, configuration):
+        self.json_string = json.loads(configuration['json'])
+
+    def get_status(self, response):
+        response_dict = json.loads(response.text)
+        check = {k: response_dict[k] for k in response_dict if k in self.json_string and response_dict[k] == self.json_string[k]}
+        if check:
+            return st.COMPONENT_STATUS_OPERATIONAL
+        else:
+            return st.COMPONENT_STATUS_PARTIAL_OUTAGE
+
+    def get_message(self, response):
+        return 'Json did not match anything in the body'
+
+    def __str__(self):
+        return repr('Json: %s' % (self.json_string,))
