@@ -18,7 +18,7 @@ import status as st
 # same exact structure.
 configuration_mandatory_fields = {
     'endpoint': ['url', 'method', 'timeout', 'expectation'],
-    'cachet': ['api_url', 'token', 'component_id'],
+    'cachet': ['api_url', 'token', 'component_name'],
     'frequency': []}
 
 
@@ -93,14 +93,21 @@ class Configuration(object):
         # We store the main information from the configuration file, so we don't keep reading from the data dictionary.
         self.headers = {'X-Cachet-Token': os.environ.get('CACHET_TOKEN') or self.data['cachet']['token']}
 
-        self.endpoint_method = os.environ.get('ENDPOINT_METHOD') or self.data['endpoint']['method']
-        self.endpoint_url = os.environ.get('ENDPOINT_URL') or self.data['endpoint']['url']
+        self.endpoint_method = self.data['endpoint']['method']
+        self.endpoint_url = self.data['endpoint']['url']
         self.endpoint_url = normalize_url(self.endpoint_url)
-        self.endpoint_timeout = os.environ.get('ENDPOINT_TIMEOUT') or self.data['endpoint'].get('timeout') or 1
-        self.allowed_fails = os.environ.get('ALLOWED_FAILS') or self.data['endpoint'].get('allowed_fails') or 0
+
+        self.endpoint_data = self.data['endpoint'].get('data')
+        if self.endpoint_data:
+            self.endpoint_data = json.dumps(self.endpoint_data)
+
+        self.endpoint_headers = self.data['endpoint'].get('headers')
+        self.endpoint_timeout = self.data['endpoint'].get('timeout') or 1
+        self.allowed_fails = self.data['endpoint'].get('allowed_fails') or 0
 
         self.api_url = os.environ.get('CACHET_API_URL') or self.data['cachet']['api_url']
-        self.component_id = os.environ.get('CACHET_COMPONENT_ID') or self.data['cachet']['component_id']
+
+        self.component_id = self.create_or_get_component()
         self.metric_id = os.environ.get('CACHET_METRIC_ID') or self.data['cachet'].get('metric_id')
 
         if self.metric_id is not None:
@@ -121,6 +128,44 @@ class Configuration(object):
         self.expectations = [Expectaction.create(expectation) for expectation in self.data['endpoint']['expectation']]
         for expectation in self.expectations:
             self.logger.info('Registered expectation: %s' % (expectation,))
+
+    def create_or_get_component(self):
+        group_request = requests.get('%s/components/groups' % (self.api_url),
+            params={'name': self.data['cachet']['component_group']},
+            headers=self.headers
+        )
+
+        group_data = json.loads(group_request.text)['data']
+        if not group_data:
+            group_create_request = requests.post('%s/components/groups' % (self.api_url),
+                data={'name': self.data['cachet']['component_group'], 'collapsed': 2},
+                headers=self.headers
+            )
+            group_id = json.loads(group_create_request.text)['data']['id']
+        else:
+            group_id = group_data[0]['id']
+
+        component_request = requests.get('%s/components' % (self.api_url),
+            params={'name': self.data['cachet']['component_name'], 'group_id': group_id},
+            headers=self.headers
+        )
+        component_data = json.loads(component_request.text)['data']
+        if not component_data:
+            component_create_request = requests.post('%s/components' % (self.api_url),
+                data={
+                    'name': self.data['cachet']['component_name'],
+                    'status': 1,
+                    'link': self.endpoint_url,
+                    'group_id': group_id,
+                    'enabled': True
+                },
+                headers=self.headers
+            )
+            component_id = json.loads(component_create_request.text)['data']['id']
+        else:
+            component_id = component_data[0]['id']
+
+        return component_id
 
     def get_default_metric_value(self, metric_id):
         """Returns default value for configured metric."""
@@ -172,7 +217,13 @@ class Configuration(object):
         according to the expectation results.
         """
         try:
-            self.request = requests.request(self.endpoint_method, self.endpoint_url, timeout=self.endpoint_timeout)
+            self.request = requests.request(
+                self.endpoint_method,
+                self.endpoint_url,
+                data=self.endpoint_data,
+                headers=self.endpoint_headers,
+                timeout=self.endpoint_timeout
+            )
             self.current_timestamp = int(time.time())
         except requests.ConnectionError:
             self.message = 'The URL is unreachable: %s %s' % (self.endpoint_method, self.endpoint_url)
@@ -180,12 +231,12 @@ class Configuration(object):
             self.status = st.COMPONENT_STATUS_PARTIAL_OUTAGE
             return
         except requests.HTTPError:
-            self.message = 'Unexpected HTTP response'
+            self.message = 'Unexpected HTTP response: %s %s' % (self.endpoint_method, self.endpoint_url)
             self.logger.exception(self.message)
             self.status = st.COMPONENT_STATUS_PARTIAL_OUTAGE
             return
         except requests.Timeout:
-            self.message = 'Request timed out'
+            self.message = 'Request timed out: %s %s' % (self.endpoint_method, self.endpoint_url)
             self.logger.warning(self.message)
             self.status = st.COMPONENT_STATUS_PERFORMANCE_ISSUES
             return
@@ -359,7 +410,7 @@ class HttpStatus(Expectaction):
             return st.COMPONENT_STATUS_PARTIAL_OUTAGE
 
     def get_message(self, response):
-        return 'Unexpected HTTP status (%s)' % (response.status_code,)
+        return 'Unexpected HTTP status (%s), %s' % (response.status_code, response.url)
 
     def __str__(self):
         return repr('HTTP status range: %s' % (self.status_range,))
@@ -374,9 +425,8 @@ class Latency(Expectaction):
             return st.COMPONENT_STATUS_OPERATIONAL
         else:
             return st.COMPONENT_STATUS_PERFORMANCE_ISSUES
-
     def get_message(self, response):
-        return 'Latency above threshold: %.4f seconds' % (response.elapsed.total_seconds(),)
+        return 'Latency above threshold: %.4f seconds, URL: %s' % (response.elapsed.total_seconds(), response.url)
 
     def __str__(self):
         return repr('Latency threshold: %.4f seconds' % (self.threshold,))
