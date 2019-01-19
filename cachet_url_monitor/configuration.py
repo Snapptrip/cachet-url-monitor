@@ -108,7 +108,7 @@ class Configuration(object):
         self.api_url = os.environ.get('CACHET_API_URL') or self.data['cachet']['api_url']
 
         self.component_id = self.create_or_get_component()
-        self.metric_id = os.environ.get('CACHET_METRIC_ID') or self.data['cachet'].get('metric_id')
+        self.metric_id = self.data['cachet'].get('metric_id')
 
         if self.metric_id is not None:
             self.default_metric_value = self.get_default_metric_value(self.metric_id)

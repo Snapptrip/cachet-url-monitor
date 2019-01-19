@@ -83,7 +83,7 @@ def adapter(config_file):
         new_endpoint = copy.deepcopy(config)
         new_endpoint['cachet']['component_name'] = endpoint.pop('component_name')
         new_endpoint['cachet']['component_group'] = endpoint.pop('component_group')
-        new_endpoint['cachet']['metric_id'] = endpoint.pop('metric_id')
+        new_endpoint['cachet']['metric_id'] = endpoint.pop('metric_id', None)
         new_endpoint['endpoint'] = endpoint
         new_endpoint.pop('endpoints')
 
